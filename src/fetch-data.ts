@@ -18,7 +18,7 @@ export async function fetchData() {
 	if (isCacheFresh()) return cache;
 
 	const response = await fetch(
-		"https://api.cts-strasbourg.eu/v1/siri/2.0/estimated-timetable?PreviewInternal=PT30M&GetStopIdInsteadOfStopCode=true",
+		"https://api.cts-strasbourg.eu/v1/siri/2.0/estimated-timetable?GetStopIdInsteadOfStopCode=true",
 		{
 			headers: {
 				authorization: `Basic ${btoa(`${process.env.API_TOKEN}:`)}`,
