@@ -1,76 +1,87 @@
+import { setTimeout } from "node:timers/promises";
 import { serve } from "@hono/node-server";
-import dayjs from "dayjs";
 import GtfsRealtime from "gtfs-realtime-bindings";
 import { Hono } from "hono";
+import { Temporal } from "temporal-polyfill";
 
-import { fetchData } from "./fetch-data.js";
+import { PORT, REFRESH_INTERVAL } from "./config.js";
+import { handleRequest } from "./gtfs-rt/handle-request.js";
+import { useRealtimeStore } from "./gtfs-rt/use-realtime-store.js";
+import { fetchEstimatedTimetable } from "./siri-lite/estimated-timetable.js";
 
-async function generateTripUpdate() {
-	const data = await fetchData();
+console.log(` ,----.,--------.,------.,---.        ,------.,--------.  ,-----.,--------.,---.   
+'  .-./'--.  .--'|  .---'   .-',-----.|  .--. '--.  .--' '  .--./'--.  .--'   .-'  
+|  | .---.|  |   |  \`--,\`.  \`-.'-----'|  '--'.'  |  |    |  |       |  |  \`.  \`-.  
+'  '--'  ||  |   |  |\`  .-'    |      |  |\\  \\   |  |    '  '--'\\   |  |  .-'    | 
+ \`------' \`--'   \`--'   \`-----'       \`--' '--'  \`--'     \`-----'   \`--'  \`-----'`);
 
-	return {
-		header: {
-			gtfsRealtimeVersion: "2.0",
-			timestamp: dayjs(data.ServiceDelivery.ResponseTimestamp).unix(),
-			incrementality:
-				GtfsRealtime.transit_realtime.FeedHeader.Incrementality.FULL_DATASET,
-		},
-		entity:
-			data.ServiceDelivery.EstimatedTimetableDelivery[0].EstimatedJourneyVersionFrame.map(
-				({ RecordedAtTime, EstimatedVehicleJourney }) => {
-					const tripId =
-						EstimatedVehicleJourney[0].FramedVehicleJourneyRef
-							.DatedVehicleJourneySAERef;
-					return {
-						id: `SM:${tripId}`,
-						tripUpdate: {
-							stopTimeUpdate: EstimatedVehicleJourney[0].EstimatedCalls.map(
-								({
-									StopPointRef,
-									ExpectedArrivalTime,
-									ExpectedDepartureTime,
-								}) => ({
-									arrival: ExpectedArrivalTime
-										? { time: dayjs(ExpectedArrivalTime).unix() }
-										: undefined,
-									departure: ExpectedDepartureTime
-										? { time: dayjs(ExpectedDepartureTime).unix() }
-										: undefined,
-									stopId: StopPointRef,
-									scheduleRelationship:
-										GtfsRealtime.transit_realtime.TripUpdate.StopTimeUpdate
-											.ScheduleRelationship.SCHEDULED,
-								}),
-							),
-							timestamp: dayjs(RecordedAtTime).unix(),
-							trip: {
-								tripId,
-								scheduleRelationship:
-									GtfsRealtime.transit_realtime.TripDescriptor
-										.ScheduleRelationship.SCHEDULED,
-							},
-						},
-					};
-				},
-			),
-	};
-}
+const store = useRealtimeStore();
 
 const hono = new Hono();
+hono.get("/trip-updates", (c) => handleRequest(c, "protobuf", store.tripUpdates, null));
+hono.get("/trip-updates.json", (c) => handleRequest(c, "json", store.tripUpdates, null));
+hono.get("/vehicle-positions", (c) => handleRequest(c, "protobuf", null, store.vehiclePositions));
+hono.get("/vehicle-positions.json", (c) => handleRequest(c, "json", null, store.vehiclePositions));
+hono.get("/", (c) =>
+	handleRequest(c, c.req.query("format") === "json" ? "json" : "protobuf", store.tripUpdates, store.vehiclePositions),
+);
+serve({ fetch: hono.fetch, port: PORT });
+console.log(`|> Listening on :${PORT}`);
 
-hono.get("/trip-updates.json", async (c) => {
-	const tripUpdate = await generateTripUpdate();
-	return c.json(tripUpdate);
-});
+while (true) {
+	console.log("|> Updating entities");
 
-hono.get("/trip-updates", async (c) => {
-	const tripUpdate = await generateTripUpdate();
-	const serialized =
-		GtfsRealtime.transit_realtime.FeedMessage.encode(tripUpdate);
-	return c.body(serialized.finish(), 200, {
-		"Content-Type": "application/octet-stream",
-	});
-});
+	const startedAt = Date.now();
+	let error: unknown | undefined;
 
-serve({ fetch: hono.fetch, port: +(process.env.PORT ?? 3000) });
-console.log(`Listening on port ${process.env.PORT ?? 3000}`);
+	let tripUpdatesCount = 0;
+
+	try {
+		const response = await fetchEstimatedTimetable();
+
+		const [delivery] = response.ServiceDelivery.EstimatedTimetableDelivery;
+
+		for (const frame of delivery.EstimatedJourneyVersionFrame) {
+			const recordedAt = Math.floor(Temporal.Instant.from(frame.RecordedAtTime).epochMilliseconds / 1000);
+
+			for (const journey of frame.EstimatedVehicleJourney) {
+				const tripId = journey.FramedVehicleJourneyRef.DatedVehicleJourneySAERef;
+
+				tripUpdatesCount += 1;
+				store.tripUpdates.set(`ET:${tripId}`, {
+					stopTimeUpdate: journey.EstimatedCalls.map(
+						({ StopPointRef, ExpectedArrivalTime, ExpectedDepartureTime }) => ({
+							arrival: ExpectedArrivalTime
+								? { time: Math.floor(Temporal.Instant.from(ExpectedArrivalTime).epochMilliseconds / 1000) }
+								: undefined,
+							departure: ExpectedDepartureTime
+								? { time: Math.floor(Temporal.Instant.from(ExpectedDepartureTime).epochMilliseconds / 1000) }
+								: undefined,
+							stopId: StopPointRef,
+							scheduleRelationship:
+								GtfsRealtime.transit_realtime.TripUpdate.StopTimeUpdate.ScheduleRelationship.SCHEDULED,
+						}),
+					),
+					timestamp: recordedAt,
+					trip: {
+						tripId,
+						scheduleRelationship: GtfsRealtime.transit_realtime.TripDescriptor.ScheduleRelationship.SCHEDULED,
+					},
+				});
+			}
+		}
+	} catch (cause) {
+		error = cause;
+	} finally {
+		const duration = Date.now() - startedAt;
+		const waitingTime = REFRESH_INTERVAL - duration;
+
+		if (error === undefined) {
+			console.log(`✓ Done updating ${tripUpdatesCount} trip updates in ${duration}ms, waiting for ${waitingTime}ms.`);
+		} else {
+			console.error(`✘ Unable to update entities, retrying in ${waitingTime}ms.`, error);
+		}
+
+		await setTimeout(waitingTime);
+	}
+}

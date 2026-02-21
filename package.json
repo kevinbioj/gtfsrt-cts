@@ -1,29 +1,29 @@
 {
-	"name": "@kevinbioj/gtfs-rt-producer_cts",
+	"name": "@bus-tracker/gtfsrt-cts",
 	"description": "GTFS-RT data producer for CTS (Strasbourg, France).",
 	"version": "0.1.0",
+	"author": "Kevin BIOJOUT <coucou@kevinbioj.fr>",
+	"license": "MIT",
 	"main": "dist/index.js",
 	"type": "module",
-  "license": "MIT",
-	"author": "Kevin BIOJOUT <coucou@kevinbioj.fr>",
 	"scripts": {
 		"build": "tsc",
-		"dev": "tsx src/index.ts",
+		"dev": "tsx --env-file .env src/index.ts",
 		"start": "node dist/index.js",
 		"lint": "biome lint",
 		"format": "biome format --write"
 	},
-	"packageManager": "pnpm@10.14.0+sha512.ad27a79641b49c3e481a16a805baa71817a04bbe06a38d17e60e2eaee83f6a146c6a688125f5792e48dd5ba30e7da52a5cda4c3992b9ccf333f9ce223af84748",
+	"packageManager": "pnpm@10.30.1+sha512.3590e550d5384caa39bd5c7c739f72270234b2f6059e13018f975c313b1eb9fefcc09714048765d4d9efe961382c312e624572c0420762bdc5d5940cdf9be73a",
 	"devDependencies": {
-		"@biomejs/biome": "2.1.4",
-		"@types/node": "^24.2.1",
-		"tsx": "^4.20.4",
-		"typescript": "^5.9.2"
+		"@biomejs/biome": "2.4.4",
+		"@types/node": "^25.3.0",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3"
 	},
 	"dependencies": {
-		"@hono/node-server": "^1.18.2",
-		"dayjs": "^1.11.13",
+		"@hono/node-server": "^1.19.9",
 		"gtfs-realtime-bindings": "^1.1.1",
-		"hono": "^4.9.1"
+		"hono": "^4.12.1",
+		"temporal-polyfill": "^0.3.0"
 	}
 }
